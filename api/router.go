@@ -14,5 +14,8 @@ func RegisterRoutes(r *gin.Engine) {
 	{
 		api.POST("/chat", ChatHandler)
 		api.GET("/chat/ws", StreamChatHandler)
+		api.POST("/rag/ingest", RAGIngestHandler)
+		api.POST("/rag/search", RAGSearchHandler)
+		api.POST("/rag/index-code", RAGIndexCodeHandler)
 	}
 }

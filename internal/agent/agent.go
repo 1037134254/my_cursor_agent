@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"my_cursor/internal/llm"
 	"my_cursor/internal/memory"
+	"my_cursor/internal/rag"
 	"my_cursor/internal/tool"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 const SYSTEM_PROMPT = `
 你是本地AI代码助手，支持多轮连续对话与工具调用。
+若提示中包含「检索到的相关代码片段」，请优先结合这些片段回答，并注明引用路径。
 当需要调用工具时，只输出一行命令，不要解释：
 [TOOL:read_file]相对路径
 [TOOL:write_file]相对路径||文件内容
@@ -126,7 +130,7 @@ func (a *Agent) ChatStream(ctx context.Context, sessionID, msg string, onDelta f
 func (a *Agent) runSingleTask(ctx context.Context, sessionID, task string) (string, error) {
 	const maxSteps = 6
 	for i := 0; i < maxSteps; i++ {
-		prompt := buildPrompt(sessionID, task)
+		prompt := buildPrompt(ctx, sessionID, task)
 		reply, err := llm.Chat(prompt)
 		if err != nil {
 			return "", err
@@ -169,12 +173,15 @@ func decomposeTasks(msg string) []string {
 	return tasks
 }
 
-func buildPrompt(sessionID, task string) string {
+func buildPrompt(ctx context.Context, sessionID, task string) string {
 	history := memory.GetRecent(sessionID, 12)
 	var b strings.Builder
 	b.WriteString(SYSTEM_PROMPT)
 	b.WriteString("\n已注册工具: read_file, write_file\n")
 	b.WriteString("你可以多步思考并自动调用工具，完成后给出最终答案。\n")
+	if block := retrieveCodeContext(ctx, task); block != "" {
+		b.WriteString(block)
+	}
 	b.WriteString("\n近期会话上下文:\n")
 	for _, m := range history {
 		role := "用户"
@@ -188,6 +195,41 @@ func buildPrompt(sessionID, task string) string {
 	}
 	b.WriteString("\n当前任务: ")
 	b.WriteString(task)
+	return b.String()
+}
+
+func retrieveCodeContext(ctx context.Context, task string) string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("RAG_CHAT_ENABLED")), "false") {
+		return ""
+	}
+	svc, err := rag.Get()
+	if err != nil {
+		return ""
+	}
+	limit := uint64(8)
+	if s := strings.TrimSpace(os.Getenv("RAG_TOP_K")); s != "" {
+		if n, err := strconv.ParseUint(s, 10, 64); err == nil && n > 0 && n <= 32 {
+			limit = n
+		}
+	}
+	hits, err := svc.Search(ctx, task, limit)
+	if err != nil || len(hits) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n--- 检索到的相关代码片段（向量库，请结合回答）---\n")
+	for i, h := range hits {
+		src := h.Source
+		if src == "" {
+			src = "(unknown)"
+		}
+		kind := h.Kind
+		if kind == "" {
+			kind = "doc"
+		}
+		b.WriteString(fmt.Sprintf("\n[%d] score=%.3f kind=%s path=%s\n%s\n", i+1, h.Score, kind, src, h.Text))
+	}
+	b.WriteString("--- 片段结束 ---\n")
 	return b.String()
 }
 
