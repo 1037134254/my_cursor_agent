@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"my_cursor/api"
+	"my_cursor/internal/auth"
+	"my_cursor/internal/auth/oauth"
 	"my_cursor/internal/llm"
 	"os"
 	"path/filepath"
@@ -13,13 +15,16 @@ import (
 
 func main() {
 	loadDotEnv()
+	oauth.InitProviders()
 	logLLMKeyHint()
+	logAuthMode()
 
 	// 初始化模型
 	llm.Init()
 
-	// 创建工作目录
+	// 创建工作目录（含默认租户子目录）
 	_ = os.MkdirAll("./workspace", 0755)
+	_ = os.MkdirAll("./workspace/default", 0755)
 
 	r := gin.Default()
 
@@ -73,6 +78,18 @@ func findDotEnvPath() string {
 		}
 	}
 	return ""
+}
+
+func logAuthMode() {
+	if auth.Enabled() {
+		anon := "关"
+		if auth.AllowAnonymousDebug() {
+			anon = "开"
+		}
+		log.Printf("认证: AUTH_ENABLED=true（JWT + RBAC）；匿名调试=%s", anon)
+		return
+	}
+	log.Println("认证: 未启用 AUTH_ENABLED（开发模式：合成租户 default 管理员）")
 }
 
 func logLLMKeyHint() {

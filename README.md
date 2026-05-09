@@ -93,6 +93,14 @@ curl -X POST http://127.0.0.1:8089/api/chat \
 }
 ```
 
+## 企业认证（可选）
+
+- 默认 **`AUTH_ENABLED` 未开启**：行为与早期版本兼容（日志会提示「开发模式」），合成身份为租户 **`default`** 的管理员。
+- 开启 **`AUTH_ENABLED=true`** 时需配置 **`JWT_SECRET`（≥32 字符）** 与 **`AUTH_USERS`**（格式见 `.env.example`）。接口需携带 **`Authorization: Bearer <access_token>`**；WebSocket 因浏览器限制无法自定义 Header，请使用 **`/api/chat/ws?access_token=...`**（前端已自动拼接）。
+- 角色：**anon**（仅对话，可选匿名调试）、**viewer**（读工作区与检索）、**user**（写工作区与 RAG 入库）、**admin**（含修改运行时 LLM 配置）。
+- **多租户**：工作区路径为 `workspace/<租户ID>/`；Qdrant 集合名为 `<租户ID>_<RAG_COLLECTION>`。
+- **第三方登录**：已接入 **微信开放平台 · 网站扫码（qrconnect）**（`internal/auth/oauth`）。`GET /api/auth/oauth/providers` 列出已启用 Provider；前端「微信扫码」跳转授权页，回调后写入与本系统一致的 JWT。更多 Provider（钉钉等）实现同一 `oauth.Provider` 接口并在 `oauth.InitProviders()` 中注册即可。
+
 ## 目录说明
 
 - `CHANGELOG.md`：本版功能与环境变量等行为变更摘要
@@ -102,4 +110,4 @@ curl -X POST http://127.0.0.1:8089/api/chat \
 - `internal/llm/`：LLM 请求与响应解析
 - `internal/tool/`：文件读写工具（作用于 `workspace/`）
 - `web/`：Vite + Vue3 + Monaco 源码；`web/dist` 为构建输出
-- `workspace/`：运行时读写目录（自动创建）
+- `workspace/<租户ID>/`：按租户隔离的运行时目录（默认 `workspace/default/`）

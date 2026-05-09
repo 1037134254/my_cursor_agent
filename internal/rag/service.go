@@ -13,6 +13,7 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 
 	"my_cursor/internal/embed"
+	"my_cursor/internal/tenant"
 	"my_cursor/internal/textchunk"
 )
 
@@ -24,10 +25,10 @@ var (
 
 // Service 连接 Qdrant，完成切片、嵌入、写入与向量检索。
 type Service struct {
-	client     *qdrant.Client
-	collection string
-	vectorSize uint64
-	pointSeq   uint64
+	client         *qdrant.Client
+	baseCollection string
+	vectorSize     uint64
+	pointSeq       uint64
 }
 
 // PreparedChunk 已切好且带路径的文本，供代码库批量入库。
@@ -63,9 +64,9 @@ func newService() (*Service, error) {
 		return nil, err
 	}
 	return &Service{
-		client:     client,
-		collection: envOrDefault("RAG_COLLECTION", "local_docs"),
-		vectorSize: vecSize,
+		client:         client,
+		baseCollection: envOrDefault("RAG_COLLECTION", "local_docs"),
+		vectorSize:     vecSize,
 	}, nil
 }
 
@@ -77,8 +78,16 @@ func envOrDefault(key, def string) string {
 	return v
 }
 
-func (s *Service) ensureCollection(ctx context.Context) error {
-	ok, err := s.client.CollectionExists(ctx, s.collection)
+func (s *Service) collectionForTenant(tenantID string) string {
+	tid := tenant.SanitizeID(tenantID)
+	if tid == "" {
+		tid = tenant.DefaultID
+	}
+	return tid + "_" + s.baseCollection
+}
+
+func (s *Service) ensureCollection(ctx context.Context, collection string) error {
+	ok, err := s.client.CollectionExists(ctx, collection)
 	if err != nil {
 		return err
 	}
@@ -86,7 +95,7 @@ func (s *Service) ensureCollection(ctx context.Context) error {
 		return nil
 	}
 	return s.client.CreateCollection(ctx, &qdrant.CreateCollection{
-		CollectionName: s.collection,
+		CollectionName: collection,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
 			Size:     s.vectorSize,
 			Distance: qdrant.Distance_Cosine,
@@ -94,9 +103,10 @@ func (s *Service) ensureCollection(ctx context.Context) error {
 	})
 }
 
-// Ingest 将长文本切片、嵌入后写入 Qdrant。
-func (s *Service) Ingest(ctx context.Context, text, source string, maxRunes, overlap int) (int, error) {
-	if err := s.ensureCollection(ctx); err != nil {
+// Ingest 将长文本切片、嵌入后写入指定租户的集合。
+func (s *Service) Ingest(ctx context.Context, tenantID, text, source string, maxRunes, overlap int) (int, error) {
+	coll := s.collectionForTenant(tenantID)
+	if err := s.ensureCollection(ctx, coll); err != nil {
 		return 0, err
 	}
 	chunks := textchunk.Split(text, maxRunes, overlap)
@@ -118,6 +128,7 @@ func (s *Service) Ingest(ctx context.Context, text, source string, maxRunes, ove
 			"text":        ch,
 			"chunk_index": i,
 			"source":      source,
+			"tenant_id":   tenant.SanitizeID(tenantID),
 		})
 		if err != nil {
 			return 0, err
@@ -129,7 +140,7 @@ func (s *Service) Ingest(ctx context.Context, text, source string, maxRunes, ove
 		})
 	}
 	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: s.collection,
+		CollectionName: coll,
 		Points:         points,
 		Wait:           &wait,
 	})
@@ -139,16 +150,18 @@ func (s *Service) Ingest(ctx context.Context, text, source string, maxRunes, ove
 	return len(points), nil
 }
 
-// IngestPreparedChunks 将 PreparedChunk 批量嵌入写入（用于代码按行切片后的入库）。
-func (s *Service) IngestPreparedChunks(ctx context.Context, chunks []PreparedChunk) (int, error) {
+// IngestPreparedChunks 批量写入指定租户集合。
+func (s *Service) IngestPreparedChunks(ctx context.Context, tenantID string, chunks []PreparedChunk) (int, error) {
 	if len(chunks) == 0 {
 		return 0, fmt.Errorf("无切片")
 	}
-	if err := s.ensureCollection(ctx); err != nil {
+	coll := s.collectionForTenant(tenantID)
+	if err := s.ensureCollection(ctx, coll); err != nil {
 		return 0, err
 	}
 	wait := true
 	var points []*qdrant.PointStruct
+	tid := tenant.SanitizeID(tenantID)
 	for _, ch := range chunks {
 		vec, err := embed.EmbedOne(ch.Text)
 		if err != nil {
@@ -162,9 +175,10 @@ func (s *Service) IngestPreparedChunks(ctx context.Context, chunks []PreparedChu
 			kind = "doc"
 		}
 		pl, err := qdrant.TryValueMap(map[string]any{
-			"text":   ch.Text,
-			"source": ch.Source,
-			"kind":   kind,
+			"text":      ch.Text,
+			"source":    ch.Source,
+			"kind":      kind,
+			"tenant_id": tid,
 		})
 		if err != nil {
 			return 0, err
@@ -177,7 +191,7 @@ func (s *Service) IngestPreparedChunks(ctx context.Context, chunks []PreparedChu
 		})
 	}
 	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: s.collection,
+		CollectionName: coll,
 		Points:         points,
 		Wait:           &wait,
 	})
@@ -203,9 +217,10 @@ type Hit struct {
 	Kind   string  `json:"kind,omitempty"`
 }
 
-// Search 对查询句嵌入后在集合中做近邻检索。
-func (s *Service) Search(ctx context.Context, query string, limit uint64) ([]Hit, error) {
-	if err := s.ensureCollection(ctx); err != nil {
+// Search 在租户集合中检索。
+func (s *Service) Search(ctx context.Context, tenantID, query string, limit uint64) ([]Hit, error) {
+	coll := s.collectionForTenant(tenantID)
+	if err := s.ensureCollection(ctx, coll); err != nil {
 		return nil, err
 	}
 	vec, err := embed.EmbedOne(query)
@@ -219,7 +234,7 @@ func (s *Service) Search(ctx context.Context, query string, limit uint64) ([]Hit
 		limit = 5
 	}
 	res, err := s.client.Query(ctx, &qdrant.QueryPoints{
-		CollectionName: s.collection,
+		CollectionName: coll,
 		Query:          qdrant.NewQueryDense(vec),
 		Limit:          qdrant.PtrOf(limit),
 		WithPayload:    qdrant.NewWithPayload(true),

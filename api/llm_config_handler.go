@@ -1,7 +1,6 @@
 package api
 
 import (
-	"net"
 	"net/http"
 	"strings"
 
@@ -34,10 +33,6 @@ type llmConfigView struct {
 
 // LLMConfigGetHandler 返回当前运行时配置（隐藏密钥原文）。
 func LLMConfigGetHandler(c *gin.Context) {
-	if !isLocalClient(c.ClientIP()) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "仅允许本机访问"})
-		return
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"code":   0,
 		"config": toConfigView(llm.CurrentConfig()),
@@ -46,10 +41,6 @@ func LLMConfigGetHandler(c *gin.Context) {
 
 // LLMConfigPutHandler 更新运行时配置并立即生效（无需重启服务）。
 func LLMConfigPutHandler(c *gin.Context) {
-	if !isLocalClient(c.ClientIP()) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "仅允许本机访问"})
-		return
-	}
 	var req llmConfigPatchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -90,18 +81,11 @@ func LLMConfigPutHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	Audit(c, "llm_config_put", cfg.Model)
 	c.JSON(http.StatusOK, gin.H{
 		"code":   0,
 		"config": toConfigView(llm.CurrentConfig()),
 	})
-}
-
-func isLocalClient(ip string) bool {
-	if ip == "" {
-		return false
-	}
-	parsed := net.ParseIP(strings.TrimSpace(ip))
-	return parsed != nil && parsed.IsLoopback()
 }
 
 func toConfigView(cfg llm.Config) llmConfigView {

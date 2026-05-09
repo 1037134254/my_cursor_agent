@@ -29,7 +29,8 @@ func RAGIngestHandler(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 		return
 	}
-	n, err := svc.Ingest(c.Request.Context(), req.Text, req.Source, req.MaxRunes, req.Overlap)
+	tid := PrincipalFrom(c).TenantID
+	n, err := svc.Ingest(c.Request.Context(), tid, req.Text, req.Source, req.MaxRunes, req.Overlap)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -53,7 +54,8 @@ func RAGSearchHandler(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 		return
 	}
-	hits, err := svc.Search(c.Request.Context(), req.Query, req.Limit)
+	tid := PrincipalFrom(c).TenantID
+	hits, err := svc.Search(c.Request.Context(), tid, req.Query, req.Limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -95,7 +97,8 @@ func RAGIndexCodeHandler(c *gin.Context) {
 		exts = codeindex.ParseExtList(os.Getenv("CODE_INDEX_EXTS"))
 	}
 
-	files, chunks, err := codeindex.IndexCodeRoot(c.Request.Context(), root, maxLines, overlap, exts)
+	tid := PrincipalFrom(c).TenantID
+	files, chunks, err := codeindex.IndexCodeRoot(c.Request.Context(), tid, root, maxLines, overlap, exts)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

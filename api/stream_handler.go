@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"my_cursor/internal/agent"
+	"my_cursor/internal/auth"
+	"my_cursor/internal/tenant"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -37,13 +39,43 @@ type wsOutMsg struct {
 	SessionID string `json:"session_id,omitempty"`
 }
 
-// StreamChatHandler 将连接升级为 WebSocket，接收一条 JSON 消息 {"msg":"..."}，以流式增量返回模型输出。
+func wsPrincipal(c *gin.Context) (auth.Principal, bool) {
+	if !auth.Enabled() {
+		return auth.DevBootstrapPrincipal(), true
+	}
+	q := strings.TrimSpace(c.Query("access_token"))
+	if q != "" {
+		p, err := auth.ParseAccessJWT(q)
+		if err == nil {
+			return p, Can(p, PermChat)
+		}
+		return auth.Principal{}, false
+	}
+	if auth.AllowAnonymousDebug() {
+		p := auth.Principal{
+			UserID:         "anonymous",
+			TenantID:       tenant.DefaultID,
+			Roles:          []string{auth.RoleAnon},
+			AnonymousDebug: true,
+		}
+		return p, Can(p, PermChat)
+	}
+	return auth.Principal{}, false
+}
+
+// StreamChatHandler WebSocket：握手前完成鉴权；URL 可带 ?access_token=（浏览器无法自定义 WS Header）。
 func StreamChatHandler(c *gin.Context) {
+	pr, ok := wsPrincipal(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未登录或无权限"})
+		return
+	}
+
 	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	_, payload, err := conn.ReadMessage()
 	if err != nil {
@@ -80,13 +112,12 @@ func StreamChatHandler(c *gin.Context) {
 	_ = write(wsOutMsg{Type: "start", Message: "stream started"})
 
 	hasDelta := false
-	sessionID, err := agent.ChatStream(ctx, in.SessionID, in.Msg, func(delta string) error {
+	sessionID, err := agent.ChatStream(ctx, in.SessionID, in.Msg, pr.TenantID, func(delta string) error {
 		hasDelta = true
 		return write(wsOutMsg{Type: "delta", Content: delta})
 	})
 	_ = write(wsOutMsg{Type: "meta", SessionID: sessionID})
 	if err != nil {
-		// 流式超时时若已有部分输出，优雅结束，避免前端只看到报错。
 		if errors.Is(err, context.DeadlineExceeded) && hasDelta {
 			_ = write(wsOutMsg{Type: "done", Message: "stream timeout reached, partial output returned", SessionID: sessionID})
 			return
