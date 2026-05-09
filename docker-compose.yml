@@ -1,0 +1,12 @@
+# 一键启动 Qdrant（HTTP 6333 / gRPC 6334）。数据目录：./qdrant_data
+# 用法：docker compose up -d
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./qdrant_data:/qdrant/storage
+    restart: unless-stopped
