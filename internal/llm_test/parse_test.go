@@ -1,10 +1,17 @@
-package llm
+package llm_test
 
-import "testing"
+// 对应 internal/llm/parse.go、stream.go：聊天 JSON 与流式 chunk 解析。
 
+import (
+	"testing"
+
+	llm "my_cursor/internal/llm"
+)
+
+// TestParseChatContentSuccess 验证标准 choices[0].message.content 解析。
 func TestParseChatContentSuccess(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"role":"assistant","content":"hello"}}]}`)
-	got, err := parseChatContent(body)
+	got, err := llm.ParseChatContentForTest(body)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -13,32 +20,36 @@ func TestParseChatContentSuccess(t *testing.T) {
 	}
 }
 
+// TestParseChatContentNoChoices 验证 choices 为空时返回错误。
 func TestParseChatContentNoChoices(t *testing.T) {
 	body := []byte(`{"choices":[]}`)
-	_, err := parseChatContent(body)
+	_, err := llm.ParseChatContentForTest(body)
 	if err == nil {
 		t.Fatal("expected error when choices are empty")
 	}
 }
 
+// TestParseChatContentInvalidJSON 验证非法 JSON 返回错误。
 func TestParseChatContentInvalidJSON(t *testing.T) {
 	body := []byte(`{"choices":[}`)
-	_, err := parseChatContent(body)
+	_, err := llm.ParseChatContentForTest(body)
 	if err == nil {
 		t.Fatal("expected error on invalid json")
 	}
 }
 
+// TestParseChatContentEmptyMessage 验证仅空白 content 视为无效。
 func TestParseChatContentEmptyMessage(t *testing.T) {
 	body := []byte(`{"choices":[{"message":{"role":"assistant","content":"   "}}]}`)
-	_, err := parseChatContent(body)
+	_, err := llm.ParseChatContentForTest(body)
 	if err == nil {
 		t.Fatal("expected error when message content is empty")
 	}
 }
 
+// TestParseStreamChunkDelta 验证流式 delta.content 片段解析。
 func TestParseStreamChunkDelta(t *testing.T) {
-	delta, streamErr, err := parseStreamChunk(`{"choices":[{"delta":{"content":"hi"}}]}`)
+	delta, streamErr, err := llm.ParseStreamChunkForTest(`{"choices":[{"delta":{"content":"hi"}}]}`)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -50,8 +61,9 @@ func TestParseStreamChunkDelta(t *testing.T) {
 	}
 }
 
+// TestParseStreamChunkErrorField 验证响应体中带 error 字段时解析为流错误。
 func TestParseStreamChunkErrorField(t *testing.T) {
-	_, streamErr, err := parseStreamChunk(`{"error":{"message":"bad"}}`)
+	_, streamErr, err := llm.ParseStreamChunkForTest(`{"error":{"message":"bad"}}`)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

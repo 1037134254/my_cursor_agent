@@ -20,6 +20,6 @@ func main() {
 	// 注册接口
 	api.RegisterRoutes(r)
 
-	println("✅ 第1天：项目启动成功 :8080")
-	_ = r.Run(":8080")
+	println("项目启动成功 :8089")
+	_ = r.Run(":8089")
 }
