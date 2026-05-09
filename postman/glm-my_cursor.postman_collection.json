@@ -1,0 +1,65 @@
+{
+  "info": {
+    "_postman_id": "my-cursor-glm-local",
+    "name": "my_cursor · GLM / 本地接口",
+    "description": "直连智谱 OpenAI 兼容 chat/completions；以及本地 Gin 代理接口。\n\n使用前在 Postman Environment 里设置：GLM_API_KEY（智谱控制台 API Key）。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "glm_base",
+      "value": "https://open.bigmodel.cn/api/paas/v4"
+    },
+    {
+      "key": "local_base",
+      "value": "http://127.0.0.1:8089"
+    }
+  ],
+  "item": [
+    {
+      "name": "智谱 · Chat Completions（直连）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{GLM_API_KEY}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"model\": \"glm-5.1\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"只回复两个字：你好\"\n    }\n  ],\n  \"temperature\": 0.7\n}"
+        },
+        "url": "{{glm_base}}/chat/completions",
+        "description": "与项目 internal/llm OpenAI 兼容客户端一致：Bearer + JSON body。"
+      },
+      "response": []
+    },
+    {
+      "name": "本地 · POST /api/chat（经本项目 Agent）",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"msg\": \"你好\",\n  \"session_id\": \"\"\n}"
+        },
+        "url": "{{local_base}}/api/chat",
+        "description": "密钥走服务端 .env，无需在 Postman 填 Bearer。"
+      },
+      "response": []
+    }
+  ]
+}
