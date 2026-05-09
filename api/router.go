@@ -13,16 +13,26 @@ func RegisterRoutes(r *gin.Engine) {
 	})
 
 	api := r.Group("/api")
-	{
-		api.POST("/chat", ChatHandler)
-		api.GET("/chat/ws", StreamChatHandler)
-		api.GET("/llm/config", LLMConfigGetHandler)
-		api.PUT("/llm/config", LLMConfigPutHandler)
-		api.GET("/workspace/files", WorkspaceListFilesHandler)
-		api.GET("/workspace/file", WorkspaceReadFileHandler)
-		api.PUT("/workspace/file", WorkspaceWriteFileHandler)
-		api.POST("/rag/ingest", RAGIngestHandler)
-		api.POST("/rag/search", RAGSearchHandler)
-		api.POST("/rag/index-code", RAGIndexCodeHandler)
-	}
+	api.POST("/auth/login", LoginHandler)
+	api.POST("/auth/refresh", RefreshHandler)
+	api.POST("/auth/logout", LogoutHandler)
+
+	api.GET("/auth/oauth/providers", OAuthProvidersHandler)
+	api.GET("/auth/oauth/wechat/start", OAuthWeChatStartHandler)
+	api.GET("/auth/oauth/wechat/callback", OAuthWeChatCallbackHandler)
+
+	// WebSocket 在 Handler 内单独鉴权（支持 query access_token）
+	api.GET("/chat/ws", StreamChatHandler)
+
+	sec := api.Group("")
+	sec.Use(AuthMiddleware())
+	sec.POST("/chat", RequirePermission(PermChat), ChatHandler)
+	sec.GET("/llm/config", RequirePermission(PermLLMRead), LLMConfigGetHandler)
+	sec.PUT("/llm/config", RequirePermission(PermLLMWrite), LLMConfigPutHandler)
+	sec.GET("/workspace/files", RequirePermission(PermWorkspaceRead), WorkspaceListFilesHandler)
+	sec.GET("/workspace/file", RequirePermission(PermWorkspaceRead), WorkspaceReadFileHandler)
+	sec.PUT("/workspace/file", RequirePermission(PermWorkspaceWrite), WorkspaceWriteFileHandler)
+	sec.POST("/rag/ingest", RequirePermission(PermRAGWrite), RAGIngestHandler)
+	sec.POST("/rag/search", RequirePermission(PermRAGSearch), RAGSearchHandler)
+	sec.POST("/rag/index-code", RequirePermission(PermRAGWrite), RAGIndexCodeHandler)
 }

@@ -16,9 +16,11 @@ type workspaceWriteReq struct {
 	Content string `json:"content"`
 }
 
-// WorkspaceListFilesHandler GET /api/workspace/files — 列出 workspace 下所有文件（相对路径，POSIX 斜杠）。
+// WorkspaceListFilesHandler GET /api/workspace/files — 列出当前租户工作区下文件。
 func WorkspaceListFilesHandler(c *gin.Context) {
-	root := tool.ROOT
+	p := PrincipalFrom(c)
+	root := tool.DirForTenant(p.TenantID)
+	_ = os.MkdirAll(root, 0755)
 	var files []string
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -37,10 +39,11 @@ func WorkspaceListFilesHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "files": files})
 }
 
-// WorkspaceReadFileHandler GET /api/workspace/file?path=relative — 读取单个文件。
+// WorkspaceReadFileHandler GET /api/workspace/file?path=relative
 func WorkspaceReadFileHandler(c *gin.Context) {
+	p := PrincipalFrom(c)
 	rel := strings.TrimSpace(c.Query("path"))
-	full, ok := resolveWorkspaceFile(rel)
+	full, ok := resolveWorkspaceFile(p.TenantID, rel)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效路径"})
 		return
@@ -61,14 +64,15 @@ func WorkspaceReadFileHandler(c *gin.Context) {
 	})
 }
 
-// WorkspaceWriteFileHandler PUT /api/workspace/file — 保存文件。
+// WorkspaceWriteFileHandler PUT /api/workspace/file
 func WorkspaceWriteFileHandler(c *gin.Context) {
+	p := PrincipalFrom(c)
 	var req workspaceWriteReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	full, ok := resolveWorkspaceFile(req.Path)
+	full, ok := resolveWorkspaceFile(p.TenantID, req.Path)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效路径"})
 		return
@@ -81,10 +85,11 @@ func WorkspaceWriteFileHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	Audit(c, "workspace_write", filepath.ToSlash(strings.TrimSpace(req.Path)))
 	c.JSON(http.StatusOK, gin.H{"code": 0, "path": filepath.ToSlash(strings.TrimSpace(req.Path))})
 }
 
-func resolveWorkspaceFile(rel string) (full string, ok bool) {
+func resolveWorkspaceFile(tenantID, rel string) (full string, ok bool) {
 	rel = strings.TrimSpace(rel)
 	if rel == "" {
 		return "", false
@@ -99,8 +104,9 @@ func resolveWorkspaceFile(rel string) (full string, ok bool) {
 		}
 	}
 	rel = filepath.FromSlash(rel)
-	full = filepath.Join(tool.ROOT, rel)
-	rootAbs, err := filepath.Abs(tool.ROOT)
+	root := tool.DirForTenant(tenantID)
+	full = filepath.Join(root, rel)
+	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return "", false
 	}

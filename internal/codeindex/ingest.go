@@ -24,9 +24,9 @@ var skipDirNames = map[string]bool{
 
 const ingestBatchSize = 24
 
-// IndexCodeRoot 遍历 root 下源码文件，按行切片后嵌入写入 Qdrant。
+// IndexCodeRoot 遍历 root 下源码文件，按行切片后嵌入写入 Qdrant（写入租户专属集合）。
 // exts 如 {"go":true,"md":true}；为空时使用默认 go/mod/md/yaml/html。
-func IndexCodeRoot(ctx context.Context, root string, maxLines, overlap int, exts map[string]bool) (files int, chunks int, err error) {
+func IndexCodeRoot(ctx context.Context, tenantID, root string, maxLines, overlap int, exts map[string]bool) (files int, chunks int, err error) {
 	root, err = filepath.Abs(root)
 	if err != nil {
 		return 0, 0, err
@@ -105,7 +105,7 @@ func IndexCodeRoot(ctx context.Context, root string, maxLines, overlap int, exts
 		if end > len(prepared) {
 			end = len(prepared)
 		}
-		n, err := svc.IngestPreparedChunks(ctx, prepared[start:end])
+		n, err := svc.IngestPreparedChunks(ctx, tenantID, prepared[start:end])
 		if err != nil {
 			return files, total, fmt.Errorf("ingest batch %d-%d: %w", start, end, err)
 		}

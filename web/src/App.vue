@@ -63,7 +63,24 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
+function consumeOAuthRedirectQuery() {
+  const q = new URLSearchParams(window.location.search);
+  const err = q.get("oauth_error");
+  const at = q.get("access_token");
+  const rt = q.get("refresh_token");
+  if (err) {
+    status.value = "OAuth: " + err;
+  }
+  if (at) {
+    localStorage.setItem("access_token", at);
+    if (rt) localStorage.setItem("refresh_token", rt);
+    status.value = "微信登录成功";
+    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+  }
+}
+
 onMounted(() => {
+  consumeOAuthRedirectQuery();
   window.addEventListener("keydown", onKeyDown);
   void refreshTree();
 });

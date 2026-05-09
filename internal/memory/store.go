@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,29 +14,46 @@ type Message struct {
 }
 
 var (
-	mu        sync.RWMutex
-	sessions  = map[string][]Message{}
-	seqNumber uint64
+	mu       sync.RWMutex
+	sessions = map[string][]Message{}
+	seqNum   uint64
 )
 
-func EnsureSessionID(sessionID string) string {
-	if sessionID != "" {
+func sessionKey(tenantID, sessionID string) string {
+	t := strings.TrimSpace(tenantID)
+	if t == "" {
+		t = "default"
+	}
+	return t + "\x1e" + sessionID
+}
+
+// EnsureSessionID 在同一租户下生成或沿用会话 id。
+func EnsureSessionID(tenantID, sessionID string) string {
+	if strings.TrimSpace(sessionID) != "" {
 		return sessionID
 	}
-	n := atomic.AddUint64(&seqNumber, 1)
-	return fmt.Sprintf("s-%d-%d", time.Now().UnixMilli(), n)
+	t := strings.TrimSpace(tenantID)
+	if t == "" {
+		t = "default"
+	}
+	n := atomic.AddUint64(&seqNum, 1)
+	return fmt.Sprintf("s-%s-%d-%d", t, time.Now().UnixMilli(), n)
 }
 
-func Append(sessionID string, msg Message) {
+// Append 追加一条消息（按租户 + 会话隔离）。
+func Append(tenantID, sessionID string, msg Message) {
+	sk := sessionKey(tenantID, sessionID)
 	mu.Lock()
 	defer mu.Unlock()
-	sessions[sessionID] = append(sessions[sessionID], msg)
+	sessions[sk] = append(sessions[sk], msg)
 }
 
-func GetRecent(sessionID string, max int) []Message {
+// GetRecent 获取会话近期消息。
+func GetRecent(tenantID, sessionID string, max int) []Message {
+	sk := sessionKey(tenantID, sessionID)
 	mu.RLock()
 	defer mu.RUnlock()
-	src := sessions[sessionID]
+	src := sessions[sk]
 	if len(src) == 0 {
 		return nil
 	}

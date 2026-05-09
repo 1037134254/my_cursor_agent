@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { authHeaders, clearTokens, getAccessToken, login, logout } from "../lib/auth";
 
 const SESSION_KEY = "session_id";
 
@@ -17,6 +18,10 @@ const llmModel = ref("glm-5.1");
 const llmBusy = ref(false);
 const llmStatus = ref("");
 
+const loginUser = ref("");
+const loginPass = ref("");
+const loginMsg = ref("");
+
 const sessionLabel = computed(() => sessionId.value || "未创建");
 
 const showStreamHint = computed(
@@ -32,7 +37,7 @@ async function loadLLMConfig() {
   llmBusy.value = true;
   llmStatus.value = "";
   try {
-    const resp = await fetch("/api/llm/config");
+    const resp = await fetch("/api/llm/config", { headers: { ...authHeaders() } });
     if (!resp.ok) throw new Error(`加载配置失败: ${resp.status}`);
     const data = (await resp.json()) as {
       config?: { provider?: string; api_url?: string; model?: string; has_api_key?: boolean };
@@ -63,7 +68,7 @@ async function applyLLMConfig() {
     };
     const resp = await fetch("/api/llm/config", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(payload),
     });
     const data = await resp.json();
@@ -90,7 +95,43 @@ function persistSession(id: string) {
 
 function wsURL(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return proto + "//" + location.host + "/api/chat/ws";
+  let u = proto + "//" + location.host + "/api/chat/ws";
+  const t = getAccessToken();
+  if (t) {
+    u += "?access_token=" + encodeURIComponent(t);
+  }
+  return u;
+}
+
+async function doLogin() {
+  loginMsg.value = "";
+  try {
+    await login(loginUser.value.trim(), loginPass.value);
+    loginPass.value = "";
+    loginMsg.value = "已登录";
+    await loadLLMConfig();
+  } catch (e) {
+    loginMsg.value = String(e);
+  }
+}
+
+async function doLogout() {
+  await logout();
+  loginMsg.value = "已退出";
+  await loadLLMConfig();
+}
+
+/** 微信开放平台网站应用扫码（qrconnect），需后端配置 WECHAT_* 与 AUTH_ENABLED。 */
+async function startWeChatOAuth() {
+  loginMsg.value = "跳转微信…";
+  try {
+    const r = await fetch("/api/auth/oauth/wechat/start");
+    const j = (await r.json()) as { url?: string; error?: string };
+    if (!r.ok) throw new Error(j.error || String(r.status));
+    if (j.url) window.location.href = j.url;
+  } catch (e) {
+    loginMsg.value = String(e);
+  }
 }
 
 /**
@@ -165,7 +206,7 @@ async function httpChat() {
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ msg, session_id: sessionId.value }),
     });
     const data = await resp.json();
@@ -192,6 +233,29 @@ defineExpose({ streamChat, httpChat });
       <span class="title">AI</span>
       <span class="sess">会话 <code>{{ sessionLabel }}</code></span>
     </header>
+
+    <details class="llm-config">
+      <summary>登录（启用 AUTH_ENABLED 时需要）</summary>
+      <div class="llm-grid">
+        <label>
+          用户名
+          <input v-model="loginUser" type="text" autocomplete="username" />
+        </label>
+        <label>
+          密码
+          <input v-model="loginPass" type="password" autocomplete="current-password" />
+        </label>
+        <div class="llm-actions">
+          <button type="button" class="btn-apply" @click="doLogin">登录</button>
+          <button type="button" class="btn-secondary" @click="startWeChatOAuth">微信扫码</button>
+          <button type="button" class="btn-secondary" @click="doLogout">退出</button>
+          <button type="button" class="btn-secondary" @click="clearTokens(); loginMsg = '已清除本地令牌'">
+            清除令牌
+          </button>
+        </div>
+        <p v-if="loginMsg" class="llm-status">{{ loginMsg }}</p>
+      </div>
+    </details>
 
     <details class="llm-config">
       <summary>模型配置（页面手动切换，安全模式）</summary>

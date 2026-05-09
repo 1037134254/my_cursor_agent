@@ -6,9 +6,9 @@ import (
 	"my_cursor/internal/llm"
 	"my_cursor/internal/memory"
 	"my_cursor/internal/rag"
+	"my_cursor/internal/tenant"
 	"my_cursor/internal/tool"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -34,21 +34,23 @@ func newDefaultAgent() *Agent {
 	a := &Agent{
 		tools: map[string]ToolFunc{},
 	}
-	a.RegisterTool("read_file", func(_ context.Context, args string) (string, error) {
-		content, err := tool.ReadFile(strings.TrimSpace(args))
+	a.RegisterTool("read_file", func(ctx context.Context, args string) (string, error) {
+		tid := tenant.FromContext(ctx)
+		content, err := tool.ReadFile(tid, strings.TrimSpace(args))
 		if err != nil {
 			return "", err
 		}
 		return content, nil
 	})
-	a.RegisterTool("write_file", func(_ context.Context, args string) (string, error) {
+	a.RegisterTool("write_file", func(ctx context.Context, args string) (string, error) {
 		parts := strings.SplitN(args, "||", 2)
 		if len(parts) != 2 {
 			return "", fmt.Errorf("write_file 参数格式错误，期望 path||content")
 		}
 		path := strings.TrimSpace(parts[0])
 		content := parts[1]
-		if err := tool.WriteFile(path, content); err != nil {
+		tid := tenant.FromContext(ctx)
+		if err := tool.WriteFile(tid, path, content); err != nil {
 			return "", err
 		}
 		return "已写入文件: " + path, nil
@@ -60,22 +62,23 @@ func (a *Agent) RegisterTool(name string, fn ToolFunc) {
 	a.tools[name] = fn
 }
 
-func Chat(sessionID, msg string) (reply string, outSessionID string, err error) {
-	return defaultAgent.Chat(sessionID, msg)
+func Chat(sessionID, msg, tenantID string) (reply string, outSessionID string, err error) {
+	return defaultAgent.Chat(sessionID, msg, tenantID)
 }
 
-func (a *Agent) Chat(sessionID, msg string) (reply string, outSessionID string, err error) {
-	sessionID = memory.EnsureSessionID(sessionID)
+func (a *Agent) Chat(sessionID, msg, tenantID string) (reply string, outSessionID string, err error) {
+	sessionID = memory.EnsureSessionID(tenantID, sessionID)
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return "", sessionID, fmt.Errorf("msg 不能为空")
 	}
-	memory.Append(sessionID, memory.Message{Role: "user", Content: msg})
+	ctx := tenant.WithContext(context.Background(), tenantID)
+	memory.Append(tenantID, sessionID, memory.Message{Role: "user", Content: msg})
 
 	tasks := decomposeTasks(msg)
 	finalParts := make([]string, 0, len(tasks))
 	for _, task := range tasks {
-		part, err := a.runSingleTask(context.Background(), sessionID, task)
+		part, err := a.runSingleTask(ctx, sessionID, task)
 		if err != nil {
 			return "", sessionID, err
 		}
@@ -83,22 +86,23 @@ func (a *Agent) Chat(sessionID, msg string) (reply string, outSessionID string, 
 	}
 
 	finalReply := strings.Join(finalParts, "\n\n")
-	memory.Append(sessionID, memory.Message{Role: "assistant", Content: finalReply})
+	memory.Append(tenantID, sessionID, memory.Message{Role: "assistant", Content: finalReply})
 	return finalReply, sessionID, nil
 }
 
 // ChatStream 支持多轮会话；若需工具调用，先自动执行，再以流式方式输出最终答案。
-func ChatStream(ctx context.Context, sessionID, msg string, onDelta func(string) error) (outSessionID string, err error) {
-	return defaultAgent.ChatStream(ctx, sessionID, msg, onDelta)
+func ChatStream(ctx context.Context, sessionID, msg, tenantID string, onDelta func(string) error) (outSessionID string, err error) {
+	return defaultAgent.ChatStream(ctx, sessionID, msg, tenantID, onDelta)
 }
 
-func (a *Agent) ChatStream(ctx context.Context, sessionID, msg string, onDelta func(string) error) (outSessionID string, err error) {
-	sessionID = memory.EnsureSessionID(sessionID)
+func (a *Agent) ChatStream(ctx context.Context, sessionID, msg, tenantID string, onDelta func(string) error) (outSessionID string, err error) {
+	sessionID = memory.EnsureSessionID(tenantID, sessionID)
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return sessionID, fmt.Errorf("msg 不能为空")
 	}
-	memory.Append(sessionID, memory.Message{Role: "user", Content: msg})
+	ctx = tenant.WithContext(ctx, tenantID)
+	memory.Append(tenantID, sessionID, memory.Message{Role: "user", Content: msg})
 
 	tasks := decomposeTasks(msg)
 	for i, task := range tasks {
@@ -143,38 +147,26 @@ func (a *Agent) runSingleTask(ctx context.Context, sessionID, task string) (stri
 		}
 		fn, exists := a.tools[name]
 		if !exists {
-			memory.Append(sessionID, memory.Message{Role: "user", Content: "工具执行失败: 未知工具 " + name})
+			memory.Append(tenant.FromContext(ctx), sessionID, memory.Message{Role: "user", Content: "工具执行失败: 未知工具 " + name})
 			continue
 		}
 		result, err := fn(ctx, args)
 		if err != nil {
-			memory.Append(sessionID, memory.Message{Role: "user", Content: "工具执行失败: " + err.Error()})
+			memory.Append(tenant.FromContext(ctx), sessionID, memory.Message{Role: "user", Content: "工具执行失败: " + err.Error()})
 			continue
 		}
-		memory.Append(sessionID, memory.Message{Role: "user", Content: "工具执行结果: " + result})
+		memory.Append(tenant.FromContext(ctx), sessionID, memory.Message{Role: "user", Content: "工具执行结果: " + result})
 	}
 	return "", fmt.Errorf("自动任务执行超过最大步数")
 }
 
-var taskSplitter = regexp.MustCompile(`[;\n；]+`)
-
+// 一次用户请求对应一个任务（不再按分号/换行拆成多段）。
 func decomposeTasks(msg string) []string {
-	parts := taskSplitter.Split(msg, -1)
-	tasks := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			tasks = append(tasks, p)
-		}
-	}
-	if len(tasks) == 0 {
-		return []string{msg}
-	}
-	return tasks
+	return []string{msg}
 }
 
 func buildPrompt(ctx context.Context, sessionID, task string) string {
-	history := memory.GetRecent(sessionID, 12)
+	history := memory.GetRecent(tenant.FromContext(ctx), sessionID, 12)
 	var b strings.Builder
 	b.WriteString(SYSTEM_PROMPT)
 	b.WriteString("\n已注册工具: read_file, write_file\n")
@@ -212,7 +204,7 @@ func retrieveCodeContext(ctx context.Context, task string) string {
 			limit = n
 		}
 	}
-	hits, err := svc.Search(ctx, task, limit)
+	hits, err := svc.Search(ctx, tenant.FromContext(ctx), task, limit)
 	if err != nil || len(hits) == 0 {
 		return ""
 	}

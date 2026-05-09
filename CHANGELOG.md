@@ -6,8 +6,8 @@
 
 | 文件 | 说明 |
 |------|------|
-| `README.md` | 项目说明、快速开始、401 排查、`ANTHROPIC_*` 网关变量、目录结构 |
-| `.env.example` | 环境变量模板（方案 B：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL`） |
+| `README.md` | 项目说明、快速开始、401 排查、`ANTHROPIC_*`、**企业认证（JWT / `AUTH_USERS` / 微信扫码）**、目录结构 |
+| `.env.example` | 环境变量模板（含 LLM 网关变量与**认证 / 微信 OAuth** 占位注释） |
 | `http/glm-chat.http` | VS Code REST Client 示例请求 |
 | `http/http-client.env.json.example` | REST Client 私有环境示例（勿提交真实密钥） |
 | `postman/glm-my_cursor.postman_collection.json` | Postman 集合示例 |
@@ -28,10 +28,19 @@
 - **`PUT`** 若 `api_url` 为网关根地址（不含 `chat/completions`），服务端会做与 `ANTHROPIC_BASE_URL` 相同的 URL 规范化。
 - **`GET/PUT /api/workspace/file`**、**`GET /api/workspace/files`**：工作区文件读写与列表（防 `..` 穿越）。
 
+### 认证与多租户（可选）
+
+- **`AUTH_ENABLED`**：未开启时与旧版兼容（开发模式合成管理员，租户 **`default`**）；开启后需 **`JWT_SECRET`（≥32）** 与 **`AUTH_USERS`**（`用户名:密码:租户ID:角色`，多条英文 **`;`** 分隔）。
+- **`POST /api/auth/login`**、刷新令牌、**`Authorization: Bearer`**；WebSocket 使用 **`/api/chat/ws?access_token=...`**（前端已拼接）。
+- **RBAC**：`anon` / `viewer` / `user` / `admin`（详见 `README.md`「企业认证」）。
+- **多租户**：工作区 **`workspace/<租户ID>/`**；RAG 集合按租户区分。
+- **微信网站扫码**：`internal/auth/oauth`，环境变量见 `.env.example`；扩展其它 IdP 可实现同一 **`oauth.Provider`** 接口。
+
 ### 前端
 
 - **`web/`**：Vite + Vue3 + Monaco；构建产物输出到 **`web/dist`**，由 Gin 托管 **`/`**。
 - 右侧 AI：WebSocket 流式对话；模型/API URL 可在页面配置（密钥仍在服务端环境变量）。
+- 可选 **账号密码登录**（`web/src/lib/auth.ts`）：令牌存 **`localStorage`**，请求自动带 Bearer。
 
 ### 仓库与忽略规则
 

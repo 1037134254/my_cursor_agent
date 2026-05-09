@@ -19,7 +19,8 @@ func ChatHandler(c *gin.Context) {
 		return
 	}
 
-	resp, sessionID, err := agent.Chat(req.SessionID, req.Msg)
+	tid := PrincipalFrom(c).TenantID
+	resp, sessionID, err := agent.Chat(req.SessionID, req.Msg, tid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
