@@ -1,0 +1,12 @@
+.env
+.env.local
+.env.*.local
+http/http-client.private.env.json
+
+# Build artifacts
+web/dist/
+bin/
+*.exe
+
+# IDE
+.idea/

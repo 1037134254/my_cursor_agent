@@ -15,6 +15,8 @@ func TestLoadConfigDeepSeekPreset(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_URL", "")
 	t.Setenv("LLM_API_URL", "")
 	t.Setenv("LLM_CLUSTER_ENDPOINTS", "")
+	t.Setenv("LLM_MODEL", "")
+	t.Setenv("DEEPSEEK_MODEL", "")
 
 	cfg := llm.LoadConfig()
 	if cfg.Kind != llm.ProviderDeepSeek {
@@ -43,5 +45,56 @@ func TestLoadConfigClusterEndpoints(t *testing.T) {
 	}
 	if cfg.ChatEndpoints[0] != "http://a/v1/chat/completions" {
 		t.Fatal(cfg.ChatEndpoints[0])
+	}
+}
+
+func TestLoadConfigCustomAnthropic(t *testing.T) {
+	cases := []struct {
+		name       string
+		wantKey    string
+		wantURL    string
+		wantModel  string
+		anthropicK string
+		llmKey     string
+	}{
+		{
+			name:       "anthropic_key_wins",
+			wantKey:    "sk-from-gateway",
+			wantURL:    "http://gw.example.com/v1/chat/completions",
+			wantModel:  "glm-5.1",
+			anthropicK: "sk-from-gateway",
+			llmKey:     "sk-should-not-win",
+		},
+		{
+			name:       "fallback_llm_key",
+			wantKey:    "sk-fallback",
+			wantURL:    "http://gw.example.com/v1/chat/completions",
+			wantModel:  "glm-5.1",
+			anthropicK: "",
+			llmKey:     "sk-fallback",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LLM_PROVIDER", "custom")
+			t.Setenv("LLM_CLUSTER_ENDPOINTS", "")
+			t.Setenv("LLM_API_URL", "")
+			t.Setenv("ANTHROPIC_BASE_URL", "http://gw.example.com")
+			t.Setenv("ANTHROPIC_API_KEY", tc.anthropicK)
+			t.Setenv("LLM_API_KEY", tc.llmKey)
+			t.Setenv("ANTHROPIC_MODEL", "glm-5.1")
+			t.Setenv("LLM_MODEL", "")
+
+			cfg := llm.LoadConfig()
+			if cfg.APIKey != tc.wantKey {
+				t.Fatalf("api key got %q want %q", cfg.APIKey, tc.wantKey)
+			}
+			if len(cfg.ChatEndpoints) != 1 || cfg.ChatEndpoints[0] != tc.wantURL {
+				t.Fatalf("endpoints %+v", cfg.ChatEndpoints)
+			}
+			if cfg.Model != tc.wantModel {
+				t.Fatalf("model %s", cfg.Model)
+			}
+		})
 	}
 }

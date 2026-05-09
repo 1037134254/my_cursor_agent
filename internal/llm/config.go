@@ -21,6 +21,8 @@ const (
 	defaultQwenModel     = "qwen2.5-coder:7b-instruct-q4_K_M"
 	defaultDeepSeekURL   = "https://api.deepseek.com/v1/chat/completions"
 	defaultDeepSeekModel = "deepseek-chat"
+	defaultGLMURL        = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+	defaultGLMModel      = "glm-5.1"
 )
 
 // Config 网关与下游模型配置（由环境变量加载）。
@@ -39,11 +41,11 @@ type Config struct {
 	StreamTimeoutSecs int
 }
 
-// LoadConfig 从环境变量读取；Kind 为空时视为 qwen/本地 Ollama。
+// LoadConfig 从环境变量读取；Kind 为空时默认使用 GLM 5.1（OpenAI 兼容 custom）。
 func LoadConfig() Config {
 	kind := ProviderKind(strings.ToLower(strings.TrimSpace(os.Getenv("LLM_PROVIDER"))))
 	if kind == "" {
-		kind = ProviderQwen
+		kind = ProviderCustom
 	}
 
 	cfg := Config{
@@ -76,7 +78,7 @@ func LoadConfig() Config {
 			cfg.ChatEndpoints = []string{envOrDefault("LLM_API_URL", defaultOllamaChatURL)}
 		}
 		cfg.Model = envOrDefault("LLM_MODEL", defaultQwenModel)
-		cfg.APIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+		cfg.APIKey = firstNonEmptyEnv("LLM_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY")
 
 	case ProviderDeepSeek:
 		if len(cfg.ChatEndpoints) == 0 {
@@ -87,21 +89,31 @@ func LoadConfig() Config {
 			cfg.ChatEndpoints = []string{u}
 		}
 		cfg.Model = envOrDefault("DEEPSEEK_MODEL", envOrDefault("LLM_MODEL", defaultDeepSeekModel))
-		cfg.APIKey = strings.TrimSpace(envOrDefault("DEEPSEEK_API_KEY", envOrDefault("LLM_API_KEY", "")))
+		if k := firstNonEmptyEnv("DEEPSEEK_API_KEY"); k != "" {
+			cfg.APIKey = k
+		} else {
+			cfg.APIKey = firstNonEmptyEnv("LLM_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY")
+		}
 
 	case ProviderCustom:
 		if len(cfg.ChatEndpoints) == 0 {
-			cfg.ChatEndpoints = []string{envOrDefault("LLM_API_URL", defaultOllamaChatURL)}
+			if u := strings.TrimSpace(os.Getenv("LLM_API_URL")); u != "" {
+				cfg.ChatEndpoints = []string{u}
+			} else if u := AnthropicBaseToChatURL(os.Getenv("ANTHROPIC_BASE_URL")); u != "" {
+				cfg.ChatEndpoints = []string{u}
+			} else {
+				cfg.ChatEndpoints = []string{defaultGLMURL}
+			}
 		}
-		cfg.Model = envOrDefault("LLM_MODEL", defaultQwenModel)
-		cfg.APIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+		cfg.Model = envOrDefault("LLM_MODEL", envOrDefault("ANTHROPIC_MODEL", defaultGLMModel))
+		cfg.APIKey = APIKeyFromEnv()
 
 	default:
 		if len(cfg.ChatEndpoints) == 0 {
 			cfg.ChatEndpoints = []string{envOrDefault("LLM_API_URL", defaultOllamaChatURL)}
 		}
 		cfg.Model = envOrDefault("LLM_MODEL", defaultQwenModel)
-		cfg.APIKey = strings.TrimSpace(os.Getenv("LLM_API_KEY"))
+		cfg.APIKey = firstNonEmptyEnv("LLM_API_KEY", "ZHIPU_API_KEY", "BIGMODEL_API_KEY")
 	}
 
 	return cfg
