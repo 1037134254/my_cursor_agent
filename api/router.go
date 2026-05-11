@@ -20,6 +20,8 @@ func RegisterRoutes(r *gin.Engine) {
 	api.GET("/auth/oauth/providers", OAuthProvidersHandler)
 	api.GET("/auth/oauth/wechat/start", OAuthWeChatStartHandler)
 	api.GET("/auth/oauth/wechat/callback", OAuthWeChatCallbackHandler)
+	api.GET("/auth/oauth/github/start", OAuthGitHubStartHandler)
+	api.GET("/auth/oauth/github/callback", OAuthGitHubCallbackHandler)
 
 	// WebSocket 在 Handler 内单独鉴权（支持 query access_token）
 	api.GET("/chat/ws", StreamChatHandler)

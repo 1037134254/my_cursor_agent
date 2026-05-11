@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import ChatPanel from "./components/ChatPanel.vue";
 import EditorPane from "./components/EditorPane.vue";
 import FileTree from "./components/FileTree.vue";
+import LoginPage from "./components/LoginPage.vue";
+import {
+  consumeOAuthRedirect,
+  currentUser,
+  isLoggedIn,
+  logout as doLogout,
+} from "./lib/auth";
 import { fetchWorkspaceFile, fetchWorkspaceFiles, putWorkspaceFile } from "./composables/useWorkspace";
 
 const paths = ref<string[]>([]);
@@ -11,8 +18,117 @@ const editorText = ref("");
 const dirty = ref(false);
 const status = ref("");
 const loadingTree = ref(false);
+const oauthError = ref("");
+
+const me = computed(() => currentUser());
+
+// ---------- 三栏可拖拽宽度（持久化到 localStorage） ----------
+const LAYOUT_KEY = "layout_widths_v1";
+const MIN_SIDE = 160;
+const MAX_LEFT = 480;
+const MAX_RIGHT = 560;
+
+function loadLayout(): { left: number; right: number } {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (raw) {
+      const j = JSON.parse(raw) as { left?: number; right?: number };
+      return {
+        left: clamp(j.left ?? 240, MIN_SIDE, MAX_LEFT),
+        right: clamp(j.right ?? 320, MIN_SIDE, MAX_RIGHT),
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { left: 240, right: 320 };
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+const initial = loadLayout();
+const leftWidth = ref<number>(initial.left);
+const rightWidth = ref<number>(initial.right);
+
+const bodyStyle = computed(() => ({
+  gridTemplateColumns: `${leftWidth.value}px 6px minmax(0, 1fr) 6px ${rightWidth.value}px`,
+}));
+
+function persistLayout() {
+  localStorage.setItem(
+    LAYOUT_KEY,
+    JSON.stringify({ left: leftWidth.value, right: rightWidth.value }),
+  );
+}
+
+function beginDrag(side: "left" | "right", e: PointerEvent) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startW = side === "left" ? leftWidth.value : rightWidth.value;
+
+  function onMove(ev: PointerEvent) {
+    const delta = ev.clientX - startX;
+    if (side === "left") {
+      leftWidth.value = clamp(startW + delta, MIN_SIDE, MAX_LEFT);
+    } else {
+      // 右分隔条：向左拖应让右栏变宽
+      rightWidth.value = clamp(startW - delta, MIN_SIDE, MAX_RIGHT);
+    }
+  }
+  function onUp() {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    document.body.style.cursor = "";
+    persistLayout();
+  }
+  document.body.style.cursor = "col-resize";
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
+// ---------- 新建文件 ----------
+const newFilePrompting = ref(false);
+const newFilePath = ref("");
+const newFileBusy = ref(false);
+
+function startNewFile() {
+  newFilePath.value = "";
+  newFilePrompting.value = true;
+}
+
+async function confirmNewFile() {
+  const p = newFilePath.value.trim().replace(/^[/\\]+/, "");
+  if (!p) {
+    newFilePrompting.value = false;
+    return;
+  }
+  newFileBusy.value = true;
+  status.value = "";
+  try {
+    await putWorkspaceFile(p, "");
+    await refreshTree();
+    await openFile(p);
+    newFilePrompting.value = false;
+    status.value = `已新建 ${p}`;
+  } catch (e) {
+    status.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    newFileBusy.value = false;
+  }
+}
+
+function cancelNewFile() {
+  newFilePrompting.value = false;
+  newFilePath.value = "";
+}
 
 async function refreshTree() {
+  if (!isLoggedIn.value) {
+    paths.value = [];
+    return;
+  }
   loadingTree.value = true;
   status.value = "";
   try {
@@ -63,26 +179,28 @@ function onKeyDown(e: KeyboardEvent) {
   }
 }
 
-function consumeOAuthRedirectQuery() {
-  const q = new URLSearchParams(window.location.search);
-  const err = q.get("oauth_error");
-  const at = q.get("access_token");
-  const rt = q.get("refresh_token");
-  if (err) {
-    status.value = "OAuth: " + err;
-  }
-  if (at) {
-    localStorage.setItem("access_token", at);
-    if (rt) localStorage.setItem("refresh_token", rt);
-    status.value = "微信登录成功";
-    window.history.replaceState({}, "", window.location.pathname + window.location.hash);
-  }
+async function handleLogout() {
+  await doLogout();
+  paths.value = [];
+  currentPath.value = null;
+  editorText.value = "";
+  dirty.value = false;
+  status.value = "已退出登录";
 }
 
+watch(
+  isLoggedIn,
+  (val) => {
+    if (val) void refreshTree();
+  },
+  { immediate: false },
+);
+
 onMounted(() => {
-  consumeOAuthRedirectQuery();
+  const r = consumeOAuthRedirect();
+  if (r.error) oauthError.value = "微信登录失败：" + r.error;
   window.addEventListener("keydown", onKeyDown);
-  void refreshTree();
+  if (isLoggedIn.value) void refreshTree();
 });
 
 onUnmounted(() => {
@@ -91,28 +209,63 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="side-head">
-        <span>文件</span>
-        <button type="button" class="linkish" :disabled="loadingTree" @click="refreshTree">刷新</button>
-      </div>
-      <FileTree :paths="paths" @select="openFile" />
-    </aside>
+  <LoginPage v-if="!isLoggedIn" :initial-notice="oauthError" />
 
-    <main class="editor-wrap">
-      <header class="editor-bar">
-        <span class="path">{{ currentPath || "未打开文件" }}</span>
-        <span v-if="dirty" class="dot">●</span>
-        <button type="button" class="btn-save" @click="saveCurrent">保存</button>
-      </header>
-      <EditorPane :file-path="currentPath" :model-value="editorText" @update:model-value="editorText = $event" @dirty="onEditorDirty" />
-      <p v-if="status" class="status">{{ status }}</p>
-    </main>
+  <div v-else class="app">
+    <header class="top-bar">
+      <span class="brand">my_cursor</span>
+      <span class="user-info" v-if="me">
+        <span class="user-name">{{ me.username }}</span>
+        <span class="tenant">@{{ me.tenantId }}</span>
+        <span v-if="me.roles.length" class="roles">{{ me.roles.join(",") }}</span>
+      </span>
+      <button type="button" class="btn-logout" @click="handleLogout">退出</button>
+    </header>
 
-    <aside class="chat-wrap">
-      <ChatPanel />
-    </aside>
+    <div class="body" :style="bodyStyle">
+      <aside class="sidebar">
+        <div class="side-head">
+          <span>文件</span>
+          <span class="side-actions">
+            <button type="button" class="linkish" :disabled="loadingTree || newFileBusy" @click="startNewFile">+ 新建</button>
+            <button type="button" class="linkish" :disabled="loadingTree" @click="refreshTree">刷新</button>
+          </span>
+        </div>
+        <form v-if="newFilePrompting" class="new-file" @submit.prevent="confirmNewFile">
+          <input
+            v-model="newFilePath"
+            type="text"
+            placeholder="路径，例如 notes/today.md"
+            autofocus
+            :disabled="newFileBusy"
+            @keydown.esc.prevent="cancelNewFile"
+          />
+          <div class="new-file-actions">
+            <button type="submit" class="btn-mini primary" :disabled="newFileBusy || !newFilePath.trim()">建</button>
+            <button type="button" class="btn-mini" :disabled="newFileBusy" @click="cancelNewFile">取消</button>
+          </div>
+        </form>
+        <FileTree :paths="paths" @select="openFile" />
+      </aside>
+
+      <div class="splitter" @pointerdown="beginDrag('left', $event)" />
+
+      <main class="editor-wrap">
+        <header class="editor-bar">
+          <span class="path">{{ currentPath || "未打开文件" }}</span>
+          <span v-if="dirty" class="dot">●</span>
+          <button type="button" class="btn-save" @click="saveCurrent">保存</button>
+        </header>
+        <EditorPane :file-path="currentPath" :model-value="editorText" @update:model-value="editorText = $event" @dirty="onEditorDirty" />
+        <p v-if="status" class="status">{{ status }}</p>
+      </main>
+
+      <div class="splitter" @pointerdown="beginDrag('right', $event)" />
+
+      <aside class="chat-wrap">
+        <ChatPanel />
+      </aside>
+    </div>
   </div>
 </template>
 
@@ -140,17 +293,79 @@ body {
 <style scoped>
 .app {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 320px;
+  grid-template-rows: 40px 1fr;
   height: 100vh;
   background: var(--bg);
   color: var(--fg);
   font-family: ui-sans-serif, system-ui, sans-serif;
+}
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+}
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  margin-left: 8px;
+}
+.user-name {
+  color: var(--fg);
+}
+.tenant {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--panel2);
+}
+.roles {
+  font-size: 11px;
+  color: var(--accent);
+}
+.btn-logout {
+  margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn-logout:hover {
+  background: var(--hover);
+}
+.body {
+  display: grid;
+  min-height: 0;
+}
+.splitter {
+  cursor: col-resize;
+  background: var(--border);
+  position: relative;
+  z-index: 1;
+  transition: background 0.15s;
+}
+.splitter:hover,
+.splitter:active {
+  background: var(--accent);
 }
 .sidebar {
   border-right: 1px solid var(--border);
   padding: 10px 8px;
   overflow: auto;
   background: var(--panel);
+  min-width: 0;
 }
 .side-head {
   display: flex;
@@ -160,6 +375,10 @@ body {
   font-weight: 600;
   margin-bottom: 8px;
   color: var(--muted);
+}
+.side-actions {
+  display: flex;
+  gap: 10px;
 }
 .linkish {
   border: none;
@@ -171,6 +390,51 @@ body {
 }
 .linkish:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+.new-file {
+  display: grid;
+  gap: 4px;
+  padding: 6px 0 10px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
+}
+.new-file input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+.new-file input:focus {
+  border-color: var(--accent);
+}
+.new-file-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.btn-mini {
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-mini.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #0b0d12;
+}
+.btn-mini:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .editor-wrap {
   display: flex;
@@ -224,5 +488,6 @@ body {
   overflow: auto;
   background: var(--panel);
   min-height: 0;
+  min-width: 0;
 }
 </style>

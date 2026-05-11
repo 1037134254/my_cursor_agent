@@ -16,6 +16,7 @@ import (
 func main() {
 	loadDotEnv()
 	oauth.InitProviders()
+	_ = auth.InitRefreshStore()
 	logLLMKeyHint()
 	logAuthMode()
 

@@ -32,9 +32,13 @@
 
 - **`AUTH_ENABLED`**：未开启时与旧版兼容（开发模式合成管理员，租户 **`default`**）；开启后需 **`JWT_SECRET`（≥32）** 与 **`AUTH_USERS`**（`用户名:密码:租户ID:角色`，多条英文 **`;`** 分隔）。
 - **`POST /api/auth/login`**、刷新令牌、**`Authorization: Bearer`**；WebSocket 使用 **`/api/chat/ws?access_token=...`**（前端已拼接）。
+- **刷新令牌持久化**：默认探测 MySQL（`AUTH_REFRESH_MYSQL_DSN`，库不存在自动建），不可达则降级内存。Token 仅以 **SHA-256 哈希** 入库，一次性消费 + 自动轮换。
 - **RBAC**：`anon` / `viewer` / `user` / `admin`（详见 `README.md`「企业认证」）。
 - **多租户**：工作区 **`workspace/<租户ID>/`**；RAG 集合按租户区分。
-- **微信网站扫码**：`internal/auth/oauth`，环境变量见 `.env.example`；扩展其它 IdP 可实现同一 **`oauth.Provider`** 接口。
+- **第三方登录**：`internal/auth/oauth` 统一 `Provider` 抽象，已内置：
+  - **GitHub OAuth**（个人 5 分钟可申请，开发期使用）
+  - **微信开放平台 · 网站应用扫码**（需企业主体 + 备案域名，代码已就绪，等 `WECHAT_*` 配齐自动启用）
+- **前端登录页**：根据 `GET /api/auth/oauth/providers` 自动渲染对应按钮（未配置则不显示），登录态用 `isLoggedIn`/`currentUser()` 驱动。
 
 ### 前端
 
@@ -51,6 +55,19 @@
 
 - **`internal/llm_test/config_test.go`**：custom + Anthropic 方案相关加载逻辑。
 - **`internal/llm_test/live_glm_test.go`**：可选真实网络测试（需环境变量开关，默认不参与 CI）。
+
+---
+
+## 路线图（TODO）
+
+按企业化优先级排序，每条都不影响现有功能，可独立推进：
+
+- [ ] **结构化审计落盘**：把 `Audit()` 改为 JSON 行追加到 `data/audit/YYYY-MM-DD.jsonl`，并可选输出到 stdout（便于对接 ELK / Loki / SIEM）。
+- [ ] **`PUT /api/llm/config` 的运维约束**：增加 `LLM_CONFIG_ALLOW_CIDR` 白名单 + 二次确认 header，避免管理员令牌泄露后被随意切换模型 / 网关。
+- [ ] **通用 OIDC SSO**：基于 `github.com/coreos/go-oidc/v3` 增加 `oauth.OIDCProvider`，支持 Keycloak / Authentik / Azure AD / Okta，环境变量描述 `OIDC_ISSUER / CLIENT_ID / CLIENT_SECRET / REDIRECT_URI`，复用现有 binding 与 RBAC 模型。
+- [ ] **微信网站应用接入**：等申请到企业主体 + 备案域名后，填 `WECHAT_OPEN_APP_ID / SECRET / REDIRECT_URI` 即可启用；当前 `internal/auth/oauth/wechat_web.go` 已实现完整 qrconnect 流程。
+- [ ] **更多第三方**：复用 `oauth.Provider` 接口可低成本加 Gitee / 钉钉 / 企业微信 / 飞书；统一回调地址使用 `OAUTH_AFTER_LOGIN_REDIRECT`。
+- [ ] **组织 → 项目 二级隔离**：在 `Principal` 与 RAG payload 中加 `project_id`，工作区路径升级为 `workspace/<tenant>/<project>/`。
 
 ---
 
