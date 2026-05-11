@@ -10,3 +10,10 @@ bin/
 
 # IDE
 .idea/
+
+# 运行时数据（多租户工作区、审计日志、SQLite 等）
+workspace/*/
+!workspace/readme.txt
+data/
+*.sqlite
+*.sqlite-journal
