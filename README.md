@@ -2,13 +2,19 @@
 
 本项目是一个本地 AI 助手的后端原型，使用 Gin 提供 HTTP 接口，并通过本地 LLM（OpenAI 兼容接口）完成对话,后续期望对其CURSOR,整理自己的知识库+自己的模型优化接入codex能自己修改系统部分简单BUG。
 
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [docs/llm-concepts.md](docs/llm-concepts.md) | LLM、Tokenizer、上下文窗口、RAG、Prompt、Tool、MCP、Agent、元数据/指令层等概念梳理 |
+
 ## 功能概览
 
 - 提供 `POST /api/chat` 接口，接收 `{"msg":"..."}`。
 - 由 `internal/agent` 组织提示词并调用 `internal/llm`。
-- 支持模型通过特殊指令访问工作目录：
-  - `[READ]path` 读取 `workspace/` 下文件
-  - `[WRITE]path||content` 写入 `workspace/` 下文件
+- 支持模型通过约定格式调用工具访问工作目录（与 `internal/agent` 中 `SYSTEM_PROMPT` 一致）：
+  - `[TOOL:read_file]相对路径`
+  - `[TOOL:write_file]相对路径||文件内容`
 - Web IDE：`GET /` 为 Vue3 + Monaco 构建产物（先执行 `cd web && npm install && npm run build`，生成 `web/dist`）
 
 ## 故障排查：401 令牌错误

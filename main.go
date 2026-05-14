@@ -20,8 +20,9 @@ func main() {
 	logLLMKeyHint()
 	logAuthMode()
 
-	// 初始化模型
+	// 初始化模型：旧全局 cfg + 新的多租户注册表（MySQL 不可用时降级 env 只读）
 	llm.Init()
+	llm.InitRegistry()
 
 	// 创建工作目录（含默认租户子目录）
 	_ = os.MkdirAll("./workspace", 0755)

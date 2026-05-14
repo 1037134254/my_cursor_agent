@@ -4,12 +4,14 @@ import ChatPanel from "./components/ChatPanel.vue";
 import EditorPane from "./components/EditorPane.vue";
 import FileTree from "./components/FileTree.vue";
 import LoginPage from "./components/LoginPage.vue";
+import ModelAdmin from "./components/ModelAdmin.vue";
 import {
   consumeOAuthRedirect,
   currentUser,
   isLoggedIn,
   logout as doLogout,
 } from "./lib/auth";
+import { getCurrentBinding } from "./composables/useModels";
 import { fetchWorkspaceFile, fetchWorkspaceFiles, putWorkspaceFile } from "./composables/useWorkspace";
 
 const paths = ref<string[]>([]);
@@ -21,6 +23,27 @@ const loadingTree = ref(false);
 const oauthError = ref("");
 
 const me = computed(() => currentUser());
+
+const isAdmin = computed(() => {
+  const u = me.value;
+  return !!u?.roles?.includes("admin");
+});
+
+const showModelAdmin = ref(false);
+const chatModelHint = ref("");
+
+async function refreshChatModelHint() {
+  if (!isLoggedIn.value) {
+    chatModelHint.value = "";
+    return;
+  }
+  const { profile, error } = await getCurrentBinding("chat");
+  if (profile) {
+    chatModelHint.value = `chat: ${profile.id} · ${profile.model}`;
+  } else {
+    chatModelHint.value = error ? `chat: 未就绪（${error}）` : "chat: 未就绪";
+  }
+}
 
 // ---------- 三栏可拖拽宽度（持久化到 localStorage） ----------
 const LAYOUT_KEY = "layout_widths_v1";
@@ -191,7 +214,12 @@ async function handleLogout() {
 watch(
   isLoggedIn,
   (val) => {
-    if (val) void refreshTree();
+    if (val) {
+      void refreshTree();
+      void refreshChatModelHint();
+    } else {
+      chatModelHint.value = "";
+    }
   },
   { immediate: false },
 );
@@ -200,7 +228,10 @@ onMounted(() => {
   const r = consumeOAuthRedirect();
   if (r.error) oauthError.value = "微信登录失败：" + r.error;
   window.addEventListener("keydown", onKeyDown);
-  if (isLoggedIn.value) void refreshTree();
+  if (isLoggedIn.value) {
+    void refreshTree();
+    void refreshChatModelHint();
+  }
 });
 
 onUnmounted(() => {
@@ -218,9 +249,21 @@ onUnmounted(() => {
         <span class="user-name">{{ me.username }}</span>
         <span class="tenant">@{{ me.tenantId }}</span>
         <span v-if="me.roles.length" class="roles">{{ me.roles.join(",") }}</span>
+        <span v-if="chatModelHint" class="model-hint">{{ chatModelHint }}</span>
       </span>
+      <button v-if="isAdmin" type="button" class="btn-models" @click="showModelAdmin = true">模型</button>
       <button type="button" class="btn-logout" @click="handleLogout">退出</button>
     </header>
+
+    <div v-if="showModelAdmin" class="model-overlay">
+      <div class="model-overlay-inner">
+        <header class="model-overlay-head">
+          <span>模型注册表</span>
+          <button type="button" class="btn-close" @click="showModelAdmin = false">关闭</button>
+        </header>
+        <ModelAdmin />
+      </div>
+    </div>
 
     <div class="body" :style="bodyStyle">
       <aside class="sidebar">
@@ -332,8 +375,29 @@ body {
   font-size: 11px;
   color: var(--accent);
 }
-.btn-logout {
+.model-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 6px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn-models {
   margin-left: auto;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn-models:hover {
+  background: var(--hover);
+}
+.btn-logout {
   padding: 4px 12px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -343,6 +407,48 @@ body {
   font-size: 12px;
 }
 .btn-logout:hover {
+  background: var(--hover);
+}
+.model-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 24px 12px;
+  box-sizing: border-box;
+}
+.model-overlay-inner {
+  width: min(960px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  overflow: hidden;
+}
+.model-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+.btn-close {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn-close:hover {
   background: var(--hover);
 }
 .body {

@@ -5,20 +5,22 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"my_cursor/internal/tenant"
 )
 
 var (
 	mu        sync.RWMutex
-	defaultGW *Gateway
+	defaultGW *Gateway // 旧的"全局唯一" Gateway，仅用于向后兼容工具/测试，不再参与正式推理。
 	activeCfg Config
 )
 
-// Init 读取环境变量并初始化默认网关（应在 main 启动时调用一次）。
+// Init 兼容入口（旧代码可能仍调用）；新建议用 InitRegistry。
 func Init() {
 	_ = SetConfig(LoadConfig())
 }
 
-// SetConfig 允许在运行时切换模型配置（页面可调用 API 热更新，无需重启）。
+// SetConfig 兼容旧 PUT /api/llm/config：保留全局快照，但生产推理走 registry，不会读这里。
 func SetConfig(cfg Config) error {
 	normalized, err := normalizeConfig(cfg)
 	if err != nil {
@@ -31,7 +33,7 @@ func SetConfig(cfg Config) error {
 	return nil
 }
 
-// CurrentConfig 返回当前生效配置副本。
+// CurrentConfig 返回兼容快照（实际生效以 Profile 为准）。
 func CurrentConfig() Config {
 	mu.RLock()
 	defer mu.RUnlock()
@@ -48,21 +50,41 @@ func ensureGW() {
 	_ = SetConfig(LoadConfig())
 }
 
-// Chat 非流式对话（默认 Provider + 超时/重试/限流）。
-func Chat(prompt string) (string, error) {
-	ensureGW()
-	mu.RLock()
-	gw := defaultGW
-	mu.RUnlock()
-	return gw.Chat(context.Background(), prompt)
+// gatewayFromCtx 从 ctx 中取租户与 purpose（默认 chat），从 registry 找 Gateway；找不到时返回错误。
+func gatewayFromCtx(ctx context.Context, purpose Purpose) (*Gateway, error) {
+	tid := tenant.FromContext(ctx)
+	gw, _, err := Reg().GatewayFor(tid, purpose)
+	if err == nil {
+		return gw, nil
+	}
+	// 仅在 env 模式 + default 租户 + 找不到 binding 时，做一次最后兜底（保兼容期）。
+	if Reg().store.Kind() == "env" && tid == tenant.DefaultID {
+		ensureGW()
+		mu.RLock()
+		gw := defaultGW
+		mu.RUnlock()
+		if gw != nil {
+			return gw, nil
+		}
+	}
+	return nil, fmt.Errorf("tenant=%s purpose=%s 未找到可用模型 profile：%w", tid, purpose, err)
 }
 
-// ChatStream 流式对话（ctx 可由上层控制总时长）。
+// Chat 非流式：按租户路由 chat profile。
+func Chat(ctx context.Context, prompt string) (string, error) {
+	gw, err := gatewayFromCtx(ctx, PurposeChat)
+	if err != nil {
+		return "", err
+	}
+	return gw.Chat(ctx, prompt)
+}
+
+// ChatStream 流式：按租户路由 chat profile。
 func ChatStream(ctx context.Context, prompt string, onDelta func(string) error) error {
-	ensureGW()
-	mu.RLock()
-	gw := defaultGW
-	mu.RUnlock()
+	gw, err := gatewayFromCtx(ctx, PurposeChat)
+	if err != nil {
+		return err
+	}
 	return gw.ChatStream(ctx, prompt, onDelta)
 }
 

@@ -135,7 +135,7 @@ func (a *Agent) runSingleTask(ctx context.Context, sessionID, task string) (stri
 	const maxSteps = 6
 	for i := 0; i < maxSteps; i++ {
 		prompt := buildPrompt(ctx, sessionID, task)
-		reply, err := llm.Chat(prompt)
+		reply, err := llm.Chat(ctx, prompt)
 		if err != nil {
 			return "", err
 		}
