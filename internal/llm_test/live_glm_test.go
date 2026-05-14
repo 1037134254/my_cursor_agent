@@ -1,6 +1,7 @@
 package llm_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,22 +47,17 @@ func TestLiveGLM51Ping(t *testing.T) {
 	}
 	t.Logf("使用密钥长度=%d（不回显内容）", len(key))
 
-	cfg := llm.Config{
-		Kind:           llm.ProviderCustom,
-		ChatEndpoints:  []string{"https://open.bigmodel.cn/api/paas/v4/chat/completions"},
-		Model:          "glm-5.1",
-		APIKey:         key,
-		TimeoutSeconds: 90,
-		MaxRetries:     1,
-		RetryBackoffMs: 400,
-		RPM:            0,
-	}
-	if err := llm.SetConfig(cfg); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { llm.Init() })
+	// 走 env registry：直接由 env vars 合成 default 租户的 chat profile（避免依赖本地 MySQL）。
+	t.Setenv("LLM_REGISTRY", "env")
+	t.Setenv("LLM_PROVIDER", "custom")
+	t.Setenv("LLM_API_URL", "https://open.bigmodel.cn/api/paas/v4/chat/completions")
+	t.Setenv("LLM_MODEL", "glm-5.1")
+	t.Setenv("LLM_API_KEY", key)
+	t.Setenv("LLM_TIMEOUT_SECONDS", "90")
+	llm.InitRegistry()
+	t.Cleanup(func() { llm.InitRegistry() })
 
-	reply, err := llm.Chat("只回复两个汉字：你好")
+	reply, err := llm.Chat(context.Background(), "只回复两个汉字：你好")
 	if err != nil {
 		if strings.Contains(err.Error(), "status=401") {
 			t.Skipf("GLM 返回 401（密钥无效或未生效）：%v", err)

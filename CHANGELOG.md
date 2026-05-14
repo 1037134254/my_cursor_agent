@@ -7,6 +7,7 @@
 | 文件 | 说明 |
 |------|------|
 | `README.md` | 项目说明、快速开始、401 排查、`ANTHROPIC_*`、**企业认证（JWT / `AUTH_USERS` / 微信扫码）**、目录结构 |
+| `docs/llm-concepts.md` | LLM、Tokenizer、上下文与窗口、RAG、Prompt、Tool、MCP、Agent、元数据/指令层等术语梳理 |
 | `.env.example` | 环境变量模板（含 LLM 网关变量与**认证 / 微信 OAuth** 占位注释） |
 | `http/glm-chat.http` | VS Code REST Client 示例请求 |
 | `http/http-client.env.json.example` | REST Client 私有环境示例（勿提交真实密钥） |
@@ -27,6 +28,19 @@
 - **`GET/PUT /api/llm/config`**：查看或热更新运行时 LLM 配置（**仅本机 loopback**）；请求体**不允许**携带 `api_key`（须用环境变量）。
 - **`PUT`** 若 `api_url` 为网关根地址（不含 `chat/completions`），服务端会做与 `ANTHROPIC_BASE_URL` 相同的 URL 规范化。
 - **`GET/PUT /api/workspace/file`**、**`GET /api/workspace/files`**：工作区文件读写与列表（防 `..` 穿越）。
+
+### 多租户模型注册表（企业级）
+
+- 新增 **`model_profile`** 与 **`tenant_model_binding`** 两张 MySQL 表（启动时 `CREATE IF NOT EXISTS`）；推理时按 `(tenant_id, purpose)` 路由到对应 profile，租户 A/B 可分别走 GLM / DeepSeek / Ollama / 自建 vLLM。
+- **零信任密钥**：`model_profile.api_key_ref` 仅存 env 变量名（如 `GLM_KEY_A`），DB 永远没有明文 key；旋转 key 改 env 即可。
+- **租户级 RPM 覆盖**：`tenant_model_binding.rpm_override` 让每个租户在同一 profile 上拥有独立限流额度（0 表示沿用 profile 默认）。
+- **新 API**（均归在 `PermLLMAdmin` / `PermLLMRead`）：
+  - `GET/POST/PUT/DELETE /api/llm/profiles[/:id]`、`POST /api/llm/profiles/:id/probe`（一次性 ping 真实下游，30s 短超时）
+  - `GET/PUT /api/tenants/:tid/models`（admin 改任意租户，user 仅看本租户）
+  - `GET /api/llm/current?purpose=chat`（当前租户该用途的默认 profile，脱敏）
+- **运行期降级**：MySQL 不可达或 `LLM_REGISTRY=env` 时降级到只读 env 模式，仅 default 租户可用，便于本地开发零依赖。
+- **兼容期**：旧 `PUT /api/llm/config` 在 env 模式下保留语义，MySQL 模式下返回 `410 Gone` 并提示走新 API；下个版本删除。
+- 推理入口签名变更：`llm.Chat(ctx, prompt)` / `llm.ChatStream(ctx, prompt, onDelta)`，从 `tenant.FromContext(ctx)` 取租户走 registry；`agent.Chat / ChatStream` 已同步。
 
 ### 认证与多租户（可选）
 
@@ -63,7 +77,9 @@
 按企业化优先级排序，每条都不影响现有功能，可独立推进：
 
 - [ ] **结构化审计落盘**：把 `Audit()` 改为 JSON 行追加到 `data/audit/YYYY-MM-DD.jsonl`，并可选输出到 stdout（便于对接 ELK / Loki / SIEM）。
-- [ ] **`PUT /api/llm/config` 的运维约束**：增加 `LLM_CONFIG_ALLOW_CIDR` 白名单 + 二次确认 header，避免管理员令牌泄露后被随意切换模型 / 网关。
+- [ ] **LLM 调用计量**：新增 `llm_call_log` 表（tenant/user/profile/tokens/latency），异步批量写；管理后台出成本曲线。
+- [ ] **function calling 升级**：把 `[TOOL:read_file]xxx` 字符串协议升级到 OpenAI function calling JSON，提升 Agent 工具调用稳定性。
+- [ ] **Embedding profile 化**：RAG 当前硬编码 Ollama embedding；接入 `Purpose=embed` 的注册表后可按租户切 BGE/Jina/OpenAI embedding。
 - [ ] **通用 OIDC SSO**：基于 `github.com/coreos/go-oidc/v3` 增加 `oauth.OIDCProvider`，支持 Keycloak / Authentik / Azure AD / Okta，环境变量描述 `OIDC_ISSUER / CLIENT_ID / CLIENT_SECRET / REDIRECT_URI`，复用现有 binding 与 RBAC 模型。
 - [ ] **微信网站应用接入**：等申请到企业主体 + 备案域名后，填 `WECHAT_OPEN_APP_ID / SECRET / REDIRECT_URI` 即可启用；当前 `internal/auth/oauth/wechat_web.go` 已实现完整 qrconnect 流程。
 - [ ] **更多第三方**：复用 `oauth.Provider` 接口可低成本加 Gitee / 钉钉 / 企业微信 / 飞书；统一回调地址使用 `OAUTH_AFTER_LOGIN_REDIRECT`。

@@ -29,8 +29,21 @@ func RegisterRoutes(r *gin.Engine) {
 	sec := api.Group("")
 	sec.Use(AuthMiddleware())
 	sec.POST("/chat", RequirePermission(PermChat), ChatHandler)
+
+	// 旧 LLM 配置（已废弃，仅作兼容；会写到 default 租户 default chat profile）。
 	sec.GET("/llm/config", RequirePermission(PermLLMRead), LLMConfigGetHandler)
 	sec.PUT("/llm/config", RequirePermission(PermLLMWrite), LLMConfigPutHandler)
+
+	// 新模型注册表：profile 全局管理（admin only），租户级查询（本租户用户可读）。
+	sec.GET("/llm/profiles", RequirePermission(PermLLMAdmin), LLMProfilesListHandler)
+	sec.POST("/llm/profiles", RequirePermission(PermLLMAdmin), LLMProfileUpsertHandler)
+	sec.PUT("/llm/profiles/:id", RequirePermission(PermLLMAdmin), LLMProfileUpsertHandler)
+	sec.DELETE("/llm/profiles/:id", RequirePermission(PermLLMAdmin), LLMProfileDeleteHandler)
+	sec.POST("/llm/profiles/:id/probe", RequirePermission(PermLLMAdmin), LLMProfileProbeHandler)
+	sec.GET("/llm/current", RequirePermission(PermLLMRead), LLMCurrentHandler)
+	sec.GET("/tenants/:tid/models", RequirePermission(PermLLMRead), TenantModelsListHandler)
+	sec.PUT("/tenants/:tid/models", RequirePermission(PermLLMAdmin), TenantModelsPutHandler)
+
 	sec.GET("/workspace/files", RequirePermission(PermWorkspaceRead), WorkspaceListFilesHandler)
 	sec.GET("/workspace/file", RequirePermission(PermWorkspaceRead), WorkspaceReadFileHandler)
 	sec.PUT("/workspace/file", RequirePermission(PermWorkspaceWrite), WorkspaceWriteFileHandler)
